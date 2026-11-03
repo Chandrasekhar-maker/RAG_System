@@ -1,0 +1,67 @@
+{
+  "info": {
+    "_postman_id": "document-rag-collection-v1",
+    "name": "Document RAG System",
+    "description": "Pre-configured requests for Spring Boot Document RAG (Upload PDF & Ask Questions)",
+    "schema": "https://schema.getpostman.com/json/collection/v2.1.0/collection.json"
+  },
+  "item": [
+    {
+      "name": "1. Upload PDF",
+      "request": {
+        "method": "POST",
+        "header": [],
+        "body": {
+          "mode": "formdata",
+          "formdata": [
+            {
+              "key": "file",
+              "type": "file",
+              "description": "Select any PDF file from your computer to upload"
+            }
+          ]
+        },
+        "url": {
+          "raw": "http://localhost:8080/upload",
+          "protocol": "http",
+          "host": [
+            "localhost"
+          ],
+          "port": "8080",
+          "path": [
+            "upload"
+          ]
+        },
+        "description": "Upload a PDF document to be parsed, chunked, and embedded into PostgreSQL pgvector"
+      },
+      "response": []
+    },
+    {
+      "name": "2. Ask Question (RAG)",
+      "request": {
+        "method": "GET",
+        "header": [],
+        "url": {
+          "raw": "http://localhost:8080/rag?question=What are the main insights in the uploaded document?",
+          "protocol": "http",
+          "host": [
+            "localhost"
+          ],
+          "port": "8080",
+          "path": [
+            "rag"
+          ],
+          "query": [
+            {
+              "key": "question",
+              "value": "What are the main insights in the uploaded document?",
+              "description": "Your question about the uploaded document"
+            }
+          ]
+        },
+        "description": "Ask questions based strictly on the content of the uploaded PDF"
+      },
+      "response": []
+    }
+  ]
+}

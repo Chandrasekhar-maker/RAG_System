@@ -1,61 +1,69 @@
 # Document RAG System (Spring Boot + Spring AI + Docker)
 
-A production-ready **Retrieval-Augmented Generation (RAG)** application built with **Java 21**, **Spring Boot**, **Spring AI**, and **PostgreSQL with PGvector**.
+A resilient, production-ready **Retrieval-Augmented Generation (RAG)** application built with **Java 21**, **Spring Boot 4.x**, **Spring AI 2.0.x**, and **PostgreSQL with PGvector**.
 
-The application can run with either **Local LLMs via Ollama** (offline, free, private) or **Google Gemini GenAI** cloud models.
-
----
-
-## 🏗️ Architecture & Technologies
-
-- **Java Version**: 21 (Eclipse Temurin)
-- **Framework**: Spring Boot 4.x with Spring AI 2.0.x
-- **Vector Database**: PostgreSQL 16 with `pgvector` extension
-- **Embedding Models**:
-  - Ollama: `nomic-embed-text` (768 dimensions)
-  - Gemini: `gemini-embedding-001` (768 dimensions)
-- **Chat Models**:
-  - Ollama: `qwen2.5:3b-instruct` (or any compatible model)
-  - Gemini: `gemini-3.8-flash`
-- **Document Processing**: `PagePdfDocumentReader` & `TokenTextSplitter` (in-memory streaming)
-- **Containerization**: Multi-stage Docker build with Docker Compose
+The application features **Smart Dual-Model Failover**:
+- 🥇 **Primary Preference**: **Google Gemini (`gemini-3.8-flash`)** for fast, high-quality answers.
+- 🔄 **Automatic Shift / Fallback**: If Gemini's token limit, rate limit, or quota is completed, the system automatically shifts to local **Qwen (`qwen2.5:3b-instruct` via Ollama)** without crashing or dropping user requests!
 
 ---
 
-## 📋 Prerequisites
+## ⚡ 1-Command Quick Start
 
-Before running the application, make sure you have:
+Anyone with permission can start the entire project (database + AI backend) with **one single command**:
 
-### 1. Docker & Docker Compose
-If you do not have Docker installed:
-1. Download **Docker Desktop for Windows**: [https://www.docker.com/products/docker-desktop/](https://www.docker.com/products/docker-desktop/)
-2. Run the installer and ensure **"Use WSL 2 instead of Hyper-V"** is checked.
-3. Restart your computer if prompted.
-4. Open Docker Desktop and wait until the status indicator in the bottom-left corner turns green (**"Engine running"**).
-5. Verify in PowerShell:
-   ```powershell
-   docker --version
-   docker compose version
-   ```
+```bash
+docker compose up --build -d
+```
 
-### 2. Choose Your AI Provider
-
-#### Option A: Local Models with Ollama (Default)
-1. Download & install Ollama: [https://ollama.com/download](https://ollama.com/download)
-2. Open PowerShell or Terminal and pull the required models:
-   ```powershell
-   ollama pull qwen2.5:3b-instruct
-   ollama pull nomic-embed-text
-   ```
-3. Keep Ollama running on your host machine. The Docker container automatically connects to host Ollama using `http://host.docker.internal:11434`.
-
-#### Option B: Google Gemini Cloud API
-1. Get a free API key from [Google AI Studio](https://aistudio.google.com/).
-2. You will provide this API key in your `.env` configuration file (explained below). No local models or Ollama needed!
+*(No Java, Maven, or PostgreSQL installation required on your computer!)*
 
 ---
 
-## 🚀 Quick Start with Docker Compose
+## 🏗️ How the Project Works
+
+```mermaid
+flowchart TD
+    User["User / Postman"] -- "1. Upload PDF (POST /upload)" --> App["Spring Boot Backend"]
+    App -- "Parse in-memory & chunk" --> Splitter["TokenTextSplitter"]
+    Splitter -- "Generate 768-dim embeddings" --> Embeddings["Embedding Model"]
+    Embeddings -- "Store vectors & text chunks" --> DB[("PostgreSQL (pgvector)")]
+
+    Browser["User / Chrome or Postman"] -- "2. Ask Question (GET /rag?question=...)" --> App
+    App -- "Similarity Search (Cosine Distance)" --> DB
+    DB -- "Top-3 relevant document chunks" --> App
+    App -- "Try Primary: Google Gemini" --> Gemini{"Gemini Quota Available?"}
+    Gemini -- "Yes" --> GeminiModel["Google Gemini (gemini-3.8-flash)"]
+    Gemini -- "Quota / Token Limit Exceeded" --> QwenModel["Ollama (qwen2.5:3b-instruct)"]
+    GeminiModel --> Answer["Accurate Answer grounded strictly in PDF"]
+    QwenModel --> Answer
+```
+
+1. **Upload Phase**: A PDF is uploaded via `POST /upload`. It is streamed in-memory, chunked, converted to 768-dimensional vector embeddings, and stored in PostgreSQL with the `pgvector` extension.
+2. **Query Phase**: When a question is asked via `GET /rag?question=...`, the application queries `pgvector` for the top matching document chunks and constructs a strict prompt for the LLM.
+3. **Resilient AI Execution**: The app queries **Google Gemini** first. If Gemini's token limit is reached or quota is exhausted, the app catches the condition and seamlessly shifts to local **Qwen (Ollama)** to generate the answer.
+
+---
+
+## 📋 Prerequisites (What You Need to Install)
+
+On a fresh computer, you only need:
+
+1. **Docker Desktop** (with WSL 2 enabled on Windows): [Download Docker Desktop](https://www.docker.com/products/docker-desktop/)
+2. **Git**: [Download Git](https://git-scm.com/downloads)
+3. **AI Credentials / Models**:
+   - **Google Gemini (Primary)**: Get a free API key from [Google AI Studio](https://aistudio.google.com/).
+   - **Ollama (Fallback)**: Download [Ollama](https://ollama.com/) and pull the models:
+     ```bash
+     ollama pull qwen2.5:3b-instruct
+     ollama pull nomic-embed-text
+     ```
+
+*(You do **NOT** need to install PostgreSQL, Java, or Maven. Docker packages everything!)*
+
+---
+
+## 🚀 Setup Steps
 
 ### Step 1: Clone the Repository
 ```bash
@@ -63,120 +71,164 @@ git clone https://github.com/Chandrasekhar-maker/RAG_System.git
 cd RAG_System
 ```
 
-### Step 2: Configure Environment Variables
-Copy the example environment configuration:
+### Step 2: Configure Environment (`.env`)
+Create your `.env` configuration file from the template:
 ```powershell
 # Windows PowerShell
 Copy-Item .env.example .env
 
-# Linux / macOS
+# macOS / Linux
 cp .env.example .env
 ```
 
-Open `.env` in any text editor and adjust settings:
-- **Set database password**: `DB_PASSWORD=your_secure_password`
-- **If using Ollama (default)**:
-  ```env
-  AI_PROVIDER=ollama
-  OLLAMA_BASE_URL=http://host.docker.internal:11434
-  OLLAMA_CHAT_MODEL=qwen2.5:3b-instruct
-  OLLAMA_EMBEDDING_MODEL=nomic-embed-text
-  ```
-- **If using Google Gemini**:
-  ```env
-  AI_PROVIDER=gemini
-  GEMINI_API_KEY=AIzaSy...your_actual_key
-  GEMINI_CHAT_MODEL=gemini-3.8-flash
-  ```
+Open `.env` in any text editor and fill in your values:
+```env
+# Database password
+DB_PASSWORD=mysecretpassword
 
-### Step 3: Build & Start the Containers
+# Primary AI Model: Google Gemini API key
+GEMINI_API_KEY=AIzaSy...your_actual_gemini_key
+GEMINI_CHAT_MODEL=gemini-3.8-flash
+
+# Fallback AI Model: Local Ollama (Qwen)
+OLLAMA_BASE_URL=http://host.docker.internal:11434
+OLLAMA_CHAT_MODEL=qwen2.5:3b-instruct
+OLLAMA_EMBEDDING_MODEL=nomic-embed-text
+```
+
+### Step 3: Run the Application
+```bash
+docker compose up --build -d
+```
+Check application startup logs:
+```bash
+docker compose logs -f app
+```
+*(Press `Ctrl + C` to exit log viewing).*
+
+---
+
+## 📮 Using the Application (Visual UI - No Terminal Inputs!)
+
+### 1. Import Postman Collection (1-Click)
+In the project folder, we included `RAG_System.postman_collection.json`.
+1. Open **Postman**.
+2. Click **Import** (top-left).
+3. Select or drag & drop **`RAG_System.postman_collection.json`**.
+4. Both requests will appear in your Postman sidebar ready to use!
+
+---
+
+### 2. Upload a PDF Document (Postman)
+1. Open the **`1. Upload PDF`** request in Postman (`POST http://localhost:8080/upload`).
+2. Go to the **Body** tab $\rightarrow$ select **form-data**.
+3. Hover over the **`file`** row and ensure the type is **File**.
+4. Click **Select Files** and choose any PDF from your computer.
+5. Click **Send**.
+6. **Response**: `Successfully uploaded and stored <N> chunks from your_document.pdf`.
+
+---
+
+### 3. Ask Questions
+
+#### Option A: In Your Web Browser (Chrome / Edge)
+Simply type your question in the browser address bar:
+```text
+http://localhost:8080/rag?question=What are the main insights in the uploaded document?
+```
+The AI answer renders directly on the screen!
+
+#### Option B: In Postman
+1. Open the **`2. Ask Question (RAG)`** request (`GET http://localhost:8080/rag`).
+2. In the **Params** tab, enter your question in the `question` value box.
+3. Click **Send** to see the response.
+
+---
+
+## 🌿 Git Branching Workflow (How to Collaborate & Work on Features)
+
+When you or a teammate want to work on a new feature or experiment with code changes, follow this standard branch workflow. This ensures that the `main` branch always stays stable.
+
+```mermaid
+flowchart TD
+    A["main branch (Stable Code)"] -- "1. git pull origin main" --> A
+    A -- "2. git checkout -b feature/my-feature" --> B["New Branch (Has latest main code)"]
+    B -- "3. Edit code & test with docker compose" --> B
+    B -- "4a. Succeeded?" --> C{"Works as expected?"}
+    C -- "Yes" --> D["Commit & push branch<br/>git push origin feature/my-feature"]
+    D -- "5. Open Pull Request on GitHub" --> E["Merge into main"]
+    C -- "No / Aborted" --> F["Keep in separate branch or delete<br/>git branch -D feature/my-feature"]
+```
+
+### 1. Always Start by Updating Your `main` Branch
+Before starting new work, get the latest code from GitHub:
+```bash
+git checkout main
+git pull origin main
+```
+
+### 2. Create and Switch to a New Branch
+Create a new branch for your feature. This branch will automatically contain the exact current code from `main`:
+```bash
+git checkout -b feature/improve-prompt
+```
+*(Replace `feature/improve-prompt` with a name describing your change).*
+
+### 3. Work on Your Code
+Edit Java code in `src/`, update configuration, or add new features in your code editor (VS Code, IntelliJ, etc.).
+
+Test your changes locally using Docker:
 ```bash
 docker compose up --build -d
 ```
 
-This starts:
-1. `rag-postgres`: PostgreSQL database with the `pgvector` extension on port `5432`.
-2. `rag-app`: Spring Boot RAG application on port `8080`.
-
-### Step 4: Check Logs
-```bash
-docker compose logs -f app
-```
-Look for `Started DocumentRagApplication in ... seconds`. Press `Ctrl+C` to exit logs.
-
----
-
-## 📖 Using the Application
-
-### 1. Import Postman Collection (1-Click Setup)
-We have included a pre-configured collection file: `RAG_System.postman_collection.json`.
-1. Open **Postman**.
-2. Click **Import** (top left).
-3. Drag & drop `RAG_System.postman_collection.json` (from the cloned project folder).
-4. Both the **Upload PDF** and **Ask Question** requests will appear in your Postman collection!
-
----
-
-### 2. Upload a PDF Document Using Postman
-1. In Postman, open the **1. Upload PDF** request (or create a `POST` request to `http://localhost:8080/upload`).
-2. Go to the **Body** tab and select **form-data**.
-3. Set Key to `file`, hover over the field and switch the dropdown type from *Text* to **File**.
-4. In the Value column, click **Select Files** and pick any PDF from your computer.
-5. Click **Send**.
-6. **Response**:
-   ```text
-   Successfully uploaded and stored 45 chunks from your_document.pdf
+### 4. If Your Changes Succeed (Merge into `main`):
+1. **Stage and commit your changes**:
+   ```bash
+   git add .
+   git commit -m "feat: added prompt improvements and fallback logging"
+   ```
+2. **Push your feature branch to GitHub**:
+   ```bash
+   git push origin feature/improve-prompt
+   ```
+3. **Merge on GitHub**:
+   - Go to your repository on GitHub: [https://github.com/Chandrasekhar-maker/RAG_System](https://github.com/Chandrasekhar-maker/RAG_System).
+   - Click **Compare & pull request** on the yellow banner.
+   - Click **Create pull request** $\rightarrow$ **Merge pull request**.
+4. **Update your local `main` branch**:
+   ```bash
+   git checkout main
+   git pull origin main
    ```
 
+### 5. If Your Changes Do NOT Succeed (Discard or Keep Separate):
+If an experiment doesn't work out:
+- You can simply leave the branch as-is on your machine without affecting `main`.
+- Or switch back to `main` and delete the experimental branch:
+  ```bash
+  git checkout main
+  git branch -D feature/improve-prompt
+  ```
+The `main` branch remains 100% clean, working, and untouched!
+
 ---
 
-### 3. Ask Questions (Using Postman or Chrome Browser)
+## 🛠️ Handy Management Commands
 
-#### In Postman:
-1. Open the **2. Ask Question (RAG)** request (or create a `GET` request to `http://localhost:8080/rag`).
-2. Go to the **Params** tab:
-   - Key: `question`
-   - Value: `What are the key points discussed in the document?`
-3. Click **Send** to see the answer generated by the LLM based strictly on your PDF!
-
-#### In Your Chrome Web Browser:
-You can also ask questions directly in your browser address bar:
-```text
-http://localhost:8080/rag?question=What are the main findings in the document?
-```
-The answer will render directly on the web page!
+| Action | Command |
+|---|---|
+| **Start everything** | `docker compose up --build -d` |
+| **View application logs** | `docker compose logs -f app` |
+| **View database logs** | `docker compose logs -f postgres` |
+| **Stop containers** | `docker compose down` |
+| **Stop and wipe database data** | `docker compose down -v` |
+| **Rebuild after code edits** | `docker compose up --build -d` |
 
 ---
 
 ## 💾 Data Persistence & Backup
 
-- **PDF Documents**: PDFs are processed in memory and are **not** written to the container filesystem.
-- **Vectors & Extracted Text**: Saved inside the PostgreSQL database.
-- **Docker Volume**: The database uses a persistent Docker volume named `postgres_data`. Even if you stop or rebuild the containers, your indexed data remains intact.
-- **Backing up vectors**:
-  ```bash
-  docker compose exec postgres pg_dump -U postgres postgres > backup.sql
-  ```
-- **Restoring vectors**:
-  ```bash
-  cat backup.sql | docker compose exec -T postgres psql -U postgres -d postgres
-  ```
-
----
-
-## 🛠️ Management Commands
-
-| Action | Command |
-|---|---|
-| View application logs | `docker compose logs -f app` |
-| View database logs | `docker compose logs -f postgres` |
-| Stop all containers | `docker compose down` |
-| Stop and wipe database data | `docker compose down -v` |
-| Rebuild container after code changes | `docker compose up --build -d` |
-
----
-
-## 🔒 Security Best Practices
-
-- Never commit `.env` or real API keys to GitHub.
-- The `.gitignore` and `.dockerignore` files are already configured to keep all secrets, IDE files, build targets, and logs out of version control and Docker images.
+- **PDF Documents**: Streamed in memory and converted into vector embeddings.
+- **Vectors & Text Chunks**: Persisted safely in the PostgreSQL database volume (`postgres_data`).
+- Stopping the containers with `docker compose down` will **never lose your uploaded documents**. Your indexed data will still be there when you start the system again!

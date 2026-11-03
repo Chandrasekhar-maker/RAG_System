@@ -10,7 +10,6 @@ import org.springframework.ai.embedding.EmbeddingRequest;
 import org.springframework.ai.embedding.EmbeddingResponse;
 import org.springframework.ai.embedding.EmbeddingResponseMetadata;
 import org.springframework.beans.factory.annotation.Value;
-import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty;
 import org.springframework.stereotype.Component;
 
 import com.google.genai.Client;
@@ -19,25 +18,39 @@ import com.google.genai.types.EmbedContentConfig;
 import com.google.genai.types.EmbedContentResponse;
 
 @Component
-@ConditionalOnProperty(name = "ai.provider", havingValue = "gemini")
 public class GoogleGenAiEmbeddingModel extends AbstractEmbeddingModel {
 
     private final Client client;
     private final String modelName;
     private final int dimensions;
+    private final boolean configured;
 
     public GoogleGenAiEmbeddingModel(
             @Value("${spring.ai.google.genai.api-key:${GEMINI_API_KEY:${SPRING_AI_GOOGLE_GENAI_API_KEY:}}}") String apiKey,
             @Value("${spring.ai.google.genai.embedding.model:gemini-embedding-001}") String modelName,
             @Value("${spring.ai.vectorstore.pgvector.dimensions:768}") int dimensions) {
 
-        this.client = Client.builder().apiKey(apiKey).build();
         this.modelName = modelName;
         this.dimensions = dimensions;
+        if (apiKey != null && !apiKey.isBlank() && !apiKey.equalsIgnoreCase("dummy") && !apiKey.contains("your_gemini_api_key")) {
+            this.client = Client.builder().apiKey(apiKey).build();
+            this.configured = true;
+        } else {
+            this.client = null;
+            this.configured = false;
+        }
+    }
+
+    public boolean isConfigured() {
+        return this.configured && this.client != null;
     }
 
     @Override
     public EmbeddingResponse call(EmbeddingRequest request) {
+        if (!isConfigured()) {
+            throw new IllegalStateException("Google Gemini API key not configured or set to dummy placeholder.");
+        }
+
         List<String> instructions = request.getInstructions();
         List<Embedding> embeddings = new ArrayList<>();
 
@@ -70,6 +83,10 @@ public class GoogleGenAiEmbeddingModel extends AbstractEmbeddingModel {
 
     @Override
     public float[] embed(String text) {
+        if (!isConfigured()) {
+            throw new IllegalStateException("Google Gemini API key not configured or set to dummy placeholder.");
+        }
+
         EmbedContentConfig config = EmbedContentConfig.builder()
                 .outputDimensionality(this.dimensions)
                 .build();

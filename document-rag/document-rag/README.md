@@ -57,7 +57,13 @@ If you do not have Docker installed:
 
 ## 🚀 Quick Start with Docker Compose
 
-### Step 1: Configure Environment Variables
+### Step 1: Clone the Repository
+```bash
+git clone https://github.com/Chandrasekhar-maker/RAG_System.git
+cd RAG_System
+```
+
+### Step 2: Configure Environment Variables
 Copy the example environment configuration:
 ```powershell
 # Windows PowerShell
@@ -83,7 +89,7 @@ Open `.env` in any text editor and adjust settings:
   GEMINI_CHAT_MODEL=gemini-3.8-flash
   ```
 
-### Step 2: Build & Start the Containers
+### Step 3: Build & Start the Containers
 ```bash
 docker compose up --build -d
 ```
@@ -92,7 +98,7 @@ This starts:
 1. `rag-postgres`: PostgreSQL database with the `pgvector` extension on port `5432`.
 2. `rag-app`: Spring Boot RAG application on port `8080`.
 
-### Step 3: Check Logs
+### Step 4: Check Logs
 ```bash
 docker compose logs -f app
 ```
@@ -100,45 +106,33 @@ Look for `Started DocumentRagApplication in ... seconds`. Press `Ctrl+C` to exit
 
 ---
 
-## 🔨 Standalone Docker Build (Without Compose)
-
-If you prefer building and running the standalone Docker image manually:
-
-```bash
-# 1. Build the Docker image
-docker build -t document-rag .
-
-# 2. Run the Docker container (requires an active PostgreSQL/pgvector instance)
-docker run -d \
-  --name rag-app \
-  -p 8080:8080 \
-  -e SPRING_DATASOURCE_URL="jdbc:postgresql://host.docker.internal:5432/postgres" \
-  -e SPRING_DATASOURCE_USERNAME="postgres" \
-  -e SPRING_DATASOURCE_PASSWORD="your_password" \
-  -e AI_PROVIDER="ollama" \
-  -e SPRING_AI_OLLAMA_BASE_URL="http://host.docker.internal:11434" \
-  --add-host host.docker.internal:host-gateway \
-  document-rag
-```
-
----
-
 ## 📖 Using the Application
 
-### 1. Upload a PDF Document
+### 1. Upload a PDF Document (No Postman Needed!)
 Upload any PDF file via `POST /upload`. The document is parsed in memory, split into semantic chunks, converted into vector embeddings, and stored in PostgreSQL:
 
-#### Using PowerShell:
-```powershell
-curl.exe -X POST "http://localhost:8080/upload" -F "file=@D:\path\to\your\document.pdf"
-```
+#### Option A: Using the Included Helper Scripts (Easiest)
+- **Windows (PowerShell)**:
+  ```powershell
+  .\upload.ps1 "D:\path\to\your\document.pdf"
+  ```
+- **macOS / Linux**:
+  ```bash
+  chmod +x upload.sh
+  ./upload.sh /path/to/document.pdf
+  ```
 
-#### Using cURL / Git Bash:
-```bash
-curl -X POST "http://localhost:8080/upload" -F "file=@/path/to/document.pdf"
-```
+#### Option B: Using cURL directly
+- **Windows (PowerShell)**:
+  ```powershell
+  curl.exe -X POST "http://localhost:8080/upload" -F "file=@D:\path\to\your\document.pdf"
+  ```
+- **macOS / Linux**:
+  ```bash
+  curl -X POST "http://localhost:8080/upload" -F "file=@/path/to/document.pdf"
+  ```
 
-#### Using Postman:
+#### Option C: Using Postman (Optional)
 - Method: `POST`
 - URL: `http://localhost:8080/upload`
 - Body: `form-data`
@@ -150,12 +144,24 @@ curl -X POST "http://localhost:8080/upload" -F "file=@/path/to/document.pdf"
 ### 2. Ask Questions (RAG Query)
 Query the knowledge base using the `/rag` endpoint. The system performs similarity search in `pgvector` and prompts the model to answer based strictly on the uploaded document context:
 
-#### In your Web Browser:
+#### Option A: Using the Included Helper Scripts (Easiest)
+- **Windows (PowerShell)**:
+  ```powershell
+  .\ask.ps1 "What is the main topic of the document?"
+  ```
+- **macOS / Linux**:
+  ```bash
+  chmod +x ask.sh
+  ./ask.sh "What is the main topic of the document?"
+  ```
+
+#### Option B: In your Web Browser
+Open your browser and navigate to:
 ```text
 http://localhost:8080/rag?question=What is the main topic of the document?
 ```
 
-#### Using cURL:
+#### Option C: Using cURL directly
 ```bash
 curl -G "http://localhost:8080/rag" --data-urlencode "question=What is the main topic of the document?"
 ```

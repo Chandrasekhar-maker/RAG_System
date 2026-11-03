@@ -108,20 +108,31 @@ Look for `Started DocumentRagApplication in ... seconds`. Press `Ctrl+C` to exit
 
 ## 📖 Using the Application
 
-### 1. Upload a PDF Document
+### 1. Upload a PDF Document (No Postman Needed!)
 Upload any PDF file via `POST /upload`. The document is parsed in memory, split into semantic chunks, converted into vector embeddings, and stored in PostgreSQL:
 
-#### Using PowerShell:
-```powershell
-curl.exe -X POST "http://localhost:8080/upload" -F "file=@D:\path\to\your\document.pdf"
-```
+#### Option A: Using the Included Helper Scripts (Easiest)
+- **Windows (PowerShell)**:
+  ```powershell
+  .\upload.ps1 "D:\path\to\your\document.pdf"
+  ```
+- **macOS / Linux**:
+  ```bash
+  chmod +x upload.sh
+  ./upload.sh /path/to/document.pdf
+  ```
 
-#### Using cURL / Git Bash:
-```bash
-curl -X POST "http://localhost:8080/upload" -F "file=@/path/to/document.pdf"
-```
+#### Option B: Using cURL directly
+- **Windows (PowerShell)**:
+  ```powershell
+  curl.exe -X POST "http://localhost:8080/upload" -F "file=@D:\path\to\your\document.pdf"
+  ```
+- **macOS / Linux**:
+  ```bash
+  curl -X POST "http://localhost:8080/upload" -F "file=@/path/to/document.pdf"
+  ```
 
-#### Using Postman:
+#### Option C: Using Postman (Optional)
 - Method: `POST`
 - URL: `http://localhost:8080/upload`
 - Body: `form-data`
@@ -133,12 +144,24 @@ curl -X POST "http://localhost:8080/upload" -F "file=@/path/to/document.pdf"
 ### 2. Ask Questions (RAG Query)
 Query the knowledge base using the `/rag` endpoint. The system performs similarity search in `pgvector` and prompts the model to answer based strictly on the uploaded document context:
 
-#### In your Web Browser:
+#### Option A: Using the Included Helper Scripts (Easiest)
+- **Windows (PowerShell)**:
+  ```powershell
+  .\ask.ps1 "What is the main topic of the document?"
+  ```
+- **macOS / Linux**:
+  ```bash
+  chmod +x ask.sh
+  ./ask.sh "What is the main topic of the document?"
+  ```
+
+#### Option B: In your Web Browser
+Open your browser and navigate to:
 ```text
 http://localhost:8080/rag?question=What is the main topic of the document?
 ```
 
-#### Using cURL:
+#### Option C: Using cURL directly
 ```bash
 curl -G "http://localhost:8080/rag" --data-urlencode "question=What is the main topic of the document?"
 ```

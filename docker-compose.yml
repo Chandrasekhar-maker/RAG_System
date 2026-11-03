@@ -1,0 +1,64 @@
+services:
+  # ---------------------------------------------------------------
+  # PostgreSQL Vector Database (with pgvector extension)
+  # ---------------------------------------------------------------
+  postgres:
+    image: pgvector/pgvector:pg16
+    container_name: rag-postgres
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB: postgres
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: ${DB_PASSWORD:-postgres}
+    ports:
+      - "5432:5432"
+    volumes:
+      # Persistent vector database storage on host
+      - postgres_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U postgres -d postgres"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+
+  # ---------------------------------------------------------------
+  # Spring Boot RAG Application
+  # ---------------------------------------------------------------
+  app:
+    build:
+      context: ./document-rag/document-rag
+      dockerfile: Dockerfile
+    container_name: rag-app
+    restart: unless-stopped
+    ports:
+      - "8080:8080"
+    environment:
+      # Database connection
+      SPRING_DATASOURCE_URL: jdbc:postgresql://postgres:5432/postgres
+      SPRING_DATASOURCE_USERNAME: postgres
+      SPRING_DATASOURCE_PASSWORD: ${DB_PASSWORD:-postgres}
+      SPRING_AI_VECTORSTORE_PGVECTOR_INITIALIZE_SCHEMA: "true"
+      SPRING_AI_VECTORSTORE_PGVECTOR_DIMENSIONS: "768"
+      SPRING_AI_VECTORSTORE_PGVECTOR_DISTANCE_TYPE: "COSINE_DISTANCE"
+
+      # Active AI Provider ('ollama' or 'gemini')
+      AI_PROVIDER: ${AI_PROVIDER:-ollama}
+
+      # Ollama settings (active when AI_PROVIDER=ollama)
+      SPRING_AI_OLLAMA_BASE_URL: ${OLLAMA_BASE_URL:-http://host.docker.internal:11434}
+      SPRING_AI_OLLAMA_CHAT_OPTIONS_MODEL: ${OLLAMA_CHAT_MODEL:-qwen2.5:3b-instruct}
+      SPRING_AI_OLLAMA_EMBEDDING_OPTIONS_MODEL: ${OLLAMA_EMBEDDING_MODEL:-nomic-embed-text}
+
+      # Google Gemini settings (active when AI_PROVIDER=gemini)
+      SPRING_AI_GOOGLE_GENAI_API_KEY: ${GEMINI_API_KEY:-}
+      SPRING_AI_GOOGLE_GENAI_CHAT_OPTIONS_MODEL: ${GEMINI_CHAT_MODEL:-gemini-3.8-flash}
+    depends_on:
+      postgres:
+        condition: service_healthy
+    extra_hosts:
+      # Allows the container to communicate with services on host machine (like host-installed Ollama)
+      - "host.docker.internal:host-gateway"
+
+volumes:
+  postgres_data:
+    driver: local

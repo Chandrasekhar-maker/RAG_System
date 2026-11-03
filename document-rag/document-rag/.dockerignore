@@ -1,0 +1,43 @@
+# Git version control
+.git
+.gitignore
+.gitattributes
+
+# Maven build outputs & local cache
+target/
+**/target/
+build/
+**/build/
+.mvn/wrapper/maven-wrapper.jar
+
+# IDE and Editor files
+.idea/
+**/.idea/
+.vscode/
+**/.vscode/
+*.iml
+**/*.iml
+*.iws
+*.ipr
+.project
+.classpath
+.settings/
+
+# Secrets and environment configs
+.env
+.env.*
+*.env
+!.env.example
+
+# Archives and logs
+*.zip
+**/*.zip
+*.log
+**/*.log
+
+# Project documentation & docker files
+HELP.md
+README.md
+docker-compose*.yml
+Dockerfile*
+.dockerignore

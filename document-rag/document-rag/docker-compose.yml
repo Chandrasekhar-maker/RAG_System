@@ -41,17 +41,20 @@ services:
       SPRING_AI_VECTORSTORE_PGVECTOR_DIMENSIONS: "768"
       SPRING_AI_VECTORSTORE_PGVECTOR_DISTANCE_TYPE: "COSINE_DISTANCE"
 
-      # Active AI Provider ('ollama' or 'gemini')
-      AI_PROVIDER: ${AI_PROVIDER:-ollama}
+      # Google Gemini (Primary Preference)
+      SPRING_AI_GOOGLE_GENAI_API_KEY: ${GEMINI_API_KEY:-dummy}
+      SPRING_AI_GOOGLE_GENAI_CHAT_OPTIONS_MODEL: ${GEMINI_CHAT_MODEL:-gemini-3.8-flash}
+      GEMINI_API_KEY: ${GEMINI_API_KEY:-dummy}
+      GEMINI_CHAT_MODEL: ${GEMINI_CHAT_MODEL:-gemini-3.8-flash}
 
-      # Ollama settings (active when AI_PROVIDER=ollama)
+      # Ollama / Qwen (Automatic Fallback on Token/Quota Limit)
       SPRING_AI_OLLAMA_BASE_URL: ${OLLAMA_BASE_URL:-http://host.docker.internal:11434}
+      SPRING_AI_OLLAMA_CHAT_MODEL: ${OLLAMA_CHAT_MODEL:-qwen2.5:3b-instruct}
       SPRING_AI_OLLAMA_CHAT_OPTIONS_MODEL: ${OLLAMA_CHAT_MODEL:-qwen2.5:3b-instruct}
       SPRING_AI_OLLAMA_EMBEDDING_OPTIONS_MODEL: ${OLLAMA_EMBEDDING_MODEL:-nomic-embed-text}
-
-      # Google Gemini settings (active when AI_PROVIDER=gemini)
-      SPRING_AI_GOOGLE_GENAI_API_KEY: ${GEMINI_API_KEY:-}
-      SPRING_AI_GOOGLE_GENAI_CHAT_OPTIONS_MODEL: ${GEMINI_CHAT_MODEL:-gemini-3.8-flash}
+      OLLAMA_BASE_URL: ${OLLAMA_BASE_URL:-http://host.docker.internal:11434}
+      OLLAMA_CHAT_MODEL: ${OLLAMA_CHAT_MODEL:-qwen2.5:3b-instruct}
+      OLLAMA_EMBEDDING_MODEL: ${OLLAMA_EMBEDDING_MODEL:-nomic-embed-text}
     depends_on:
       postgres:
         condition: service_healthy

@@ -35,7 +35,7 @@ RUN addgroup --system --gid 1001 appgroup && \
 WORKDIR /app
 
 # Copy the packaged Spring Boot executable JAR from builder stage
-COPY --from=builder --chown=appuser:appgroup /build/target/document-rag-0.0.1-SNAPSHOT.jar app.jar
+COPY --from=builder --chown=appuser:appgroup /build/target/*.jar app.jar
 
 # Switch to non-root execution
 USER appuser

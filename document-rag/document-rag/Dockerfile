@@ -1,50 +1,20 @@
-# syntax=docker/dockerfile:1
-
-# =================================================================
-# Stage 1: Build stage (compile & package using Maven Wrapper)
-# =================================================================
-FROM eclipse-temurin:21-jdk-jammy AS builder
-
-WORKDIR /build
-
-# Copy Maven wrapper and pom.xml first to take advantage of layer caching
-COPY .mvn/ .mvn/
-COPY mvnw pom.xml ./
-
-# Normalize line endings and grant execution permission to wrapper script
-RUN sed -i 's/\r$//' mvnw && chmod +x mvnw
-
-# Resolve dependencies in a separate layer
-RUN ./mvnw dependency:go-offline -B || true
-
-# Copy project source code
-COPY src/ ./src/
-
-# Package the application (tests can be skipped during container packaging)
-RUN ./mvnw clean package -DskipTests -B
-
-# =================================================================
-# Stage 2: Runtime stage (lightweight JRE, non-root user)
-# =================================================================
-FROM eclipse-temurin:21-jre-jammy AS runner
-
-# Create dedicated non-root application user and group for security
-RUN addgroup --system --gid 1001 appgroup && \
-    adduser --system --uid 1001 --ingroup appgroup --no-create-home appuser
-
+FROM maven:3.9-eclipse-temurin-21 AS build
 WORKDIR /app
+COPY pom.xml .
+COPY src ./src
+# Build the application
+RUN mvn -B clean package -DskipTests
 
-# Copy the packaged Spring Boot executable JAR from builder stage
-COPY --from=builder --chown=appuser:appgroup /build/target/*.jar app.jar
-
-# Switch to non-root execution
-USER appuser
-
-# Expose Spring Boot standard HTTP port
+FROM eclipse-temurin:21-jre-alpine
+WORKDIR /app
+# Copy the built jar from the build stage
+COPY --from=build /app/target/*.jar app.jar
+# Expose the Spring Boot default port
 EXPOSE 8080
-
-# Recommended container memory limits and JVM tuning
-ENV JAVA_OPTS="-XX:+UseContainerSupport -XX:MaxRAMPercentage=75.0"
-
-# Launch Spring Boot application
-ENTRYPOINT ["sh", "-c", "java $JAVA_OPTS -jar app.jar"]
+# Set necessary environment variables (can be overridden at runtime)
+ENV GEMINI_API_KEY=""
+ENV OLLAMA_BASE_URL="http://host.docker.internal:11434"
+ENV OLLAMA_CHAT_MODEL="qwen2.5:3b-instruct"
+ENV APP_RAG_REFINER_ENABLED="true"
+# Run the application
+ENTRYPOINT ["java", "-jar", "/app/app.jar"]

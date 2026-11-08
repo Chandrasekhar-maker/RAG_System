@@ -5,6 +5,7 @@ import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.never;
+import static org.mockito.Mockito.times;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 
@@ -61,12 +62,17 @@ class ConditionalChatClientConfigTest {
     }
 
     private ChatClient createClient(String geminiKey) {
+        return createClient(geminiKey, true);
+    }
+
+    private ChatClient createClient(String geminiKey, boolean refinerEnabled) {
         ChatClient.Builder builder = config.chatClientBuilder(
                 geminiProvider,
                 ollamaProvider,
                 geminiKey,
                 "http://localhost:11434",
-                "qwen2.5:3b-instruct"
+                "qwen2.5:3b-instruct",
+                refinerEnabled
         );
         return builder.build();
     }
@@ -156,5 +162,91 @@ class ConditionalChatClientConfigTest {
                 .hasMessageContaining("Quota exhausted 429")
                 .hasMessageContaining("Fallback model (Qwen/Ollama - qwen2.5:3b-instruct) error")
                 .hasMessageContaining("Connection refused to Ollama");
+    }
+
+    @Test
+    void testStage2RefinementWithClumsyMarkdownAndLatexTransformsOutput() {
+        ChatClient client = createClient("test-gemini-key", true);
+
+        String clumsyRawOutput = "### 1. What the Project is About\n"
+                + "The project concerns a location-allocation problem with facilities.\n"
+                + "$$\\min_{x,y,w} \\sum_{i=1}^n \\sum_{j=1}^m w_{ij} \\sqrt{(x_i - \\alpha_j)^2 + (y_i - \\beta_j)^2}$$\n"
+                + "---\n"
+                + "The model identity is Google Gemini.";
+
+        String refinedOutput = "The project addresses a location-allocation problem where the primary objective is to find optimal site locations and minimize total product delivery costs across customer points.\n\n"
+                + "The model identity is Google Gemini.";
+
+        ChatResponse rawResponse = new ChatResponse(List.of(new Generation(new AssistantMessage(clumsyRawOutput))));
+        ChatResponse polishedResponse = new ChatResponse(List.of(new Generation(new AssistantMessage(refinedOutput))));
+
+        when(geminiModel.call(any(Prompt.class)))
+                .thenReturn(rawResponse)
+                .thenReturn(polishedResponse);
+
+        String answer = client.prompt().user("Explain problem").call().content();
+
+        assertThat(answer).isEqualTo(refinedOutput);
+        // Stage 1 (Raw generation) + Stage 2 (Refinement) = 2 calls to Gemini
+        verify(geminiModel, times(2)).call(any(Prompt.class));
+    }
+
+    @Test
+    void testStage2RefinementFailureGracefullyFallsBackToCleanedText() {
+        ChatClient client = createClient("test-gemini-key", true);
+
+        String clumsyRawOutput = "### 1. Problem Overview\n"
+                + "We solve the transportation equation:\n"
+                + "$$\\min \\sum w_{ij} d_{ij}$$\n"
+                + "---\n"
+                + "The model identity is Google Gemini.";
+
+        ChatResponse rawResponse = new ChatResponse(List.of(new Generation(new AssistantMessage(clumsyRawOutput))));
+
+        // First call succeeds (Stage 1), second call throws exception (Stage 2 fails)
+        when(geminiModel.call(any(Prompt.class)))
+                .thenReturn(rawResponse)
+                .thenThrow(new RuntimeException("Gemini refiner temporary error"));
+        when(ollamaModel.call(any(Prompt.class)))
+                .thenThrow(new RuntimeException("Ollama refiner unavailable"));
+
+        String answer = client.prompt().user("Explain problem").call().content();
+
+        // Must NOT crash; should return regex-cleaned version without $$ or ###
+        assertThat(answer).doesNotContain("$$");
+        assertThat(answer).doesNotContain("###");
+        assertThat(answer).contains("Problem Overview:");
+        assertThat(answer).contains("The model identity is Google Gemini.");
+    }
+
+    @Test
+    void testRefinerDisabledPassesThroughRawResponse() {
+        ChatClient client = createClient("test-gemini-key", false);
+
+        String clumsyRawOutput = "### 1. Problem Overview\n$$\\min x$$\n---\nDone.";
+        ChatResponse rawResponse = new ChatResponse(List.of(new Generation(new AssistantMessage(clumsyRawOutput))));
+
+        when(geminiModel.call(any(Prompt.class))).thenReturn(rawResponse);
+
+        String answer = client.prompt().user("Explain problem").call().content();
+
+        // Raw output returned verbatim without Stage 2 call
+        assertThat(answer).isEqualTo(clumsyRawOutput);
+        verify(geminiModel, times(1)).call(any(Prompt.class));
+    }
+
+    @Test
+    void testMissingInfoResponseSkipsRefinement() {
+        ChatClient client = createClient("test-gemini-key", true);
+
+        String missingInfo = "The requested information is not present in the provided documents.";
+        ChatResponse rawResponse = new ChatResponse(List.of(new Generation(new AssistantMessage(missingInfo))));
+
+        when(geminiModel.call(any(Prompt.class))).thenReturn(rawResponse);
+
+        String answer = client.prompt().user("Where is John?").call().content();
+
+        assertThat(answer).isEqualTo(missingInfo);
+        verify(geminiModel, times(1)).call(any(Prompt.class));
     }
 }

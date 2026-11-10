@@ -15,6 +15,6 @@ EXPOSE 8080
 ENV GEMINI_API_KEY=""
 ENV OLLAMA_BASE_URL="http://host.docker.internal:11434"
 ENV OLLAMA_CHAT_MODEL="qwen2.5:3b-instruct"
-ENV APP_RAG_REFINER_ENABLED="true"
+ENV APP_RAG_REFINER_ENABLED="false"
 # Run the application
 ENTRYPOINT ["java", "-jar", "/app/app.jar"]

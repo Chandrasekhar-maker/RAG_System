@@ -1,299 +1,174 @@
-# Document RAG System (Spring Boot + Spring AI + Docker)
+# Document RAG Backend
 
-A resilient, production-ready **Retrieval-Augmented Generation (RAG)** backend application built with **Java 21**, **Spring Boot 4.x**, **Spring AI 2.0.x**, and **PostgreSQL with PGVector**.
+This folder contains the Java API for the Document RAG Assistant. It accepts PDF uploads, stores document chunks and embeddings in PostgreSQL with pgvector, retrieves relevant chunks for a question, and asks a configured language model to answer from that context.
 
-The application features **Smart Dual-Model Failover**:
-- 🥇 **Primary Model**: **Google Gemini (`gemini-3.8-flash`)** for fast, high-quality, cloud-powered reasoning.
-- 🔄 **Automatic Shift / Fallback**: If Gemini's quota is exhausted, rate limit is hit, token limit is exceeded, or a temporary provider error occurs, the system automatically shifts to local **Qwen (`qwen2.5:3b-instruct` via Ollama)** without crashing, losing state, or dropping user requests!
-- 🛡️ **Resilient Configuration**: Proper option isolation ensures Gemini receives its native `GoogleGenAiChatOptions` while Ollama receives valid `OllamaChatOptions` with the model name explicitly set, preventing casting and null-model errors.
+## What is RAG?
 
----
+Retrieval-Augmented Generation (RAG) combines document search with a language model. Rather than asking the model to answer from its general training alone, this application:
 
-## ⚡ 1-Command Quick Start (Docker Desktop)
+1. Reads pages from an uploaded PDF.
+2. Splits the extracted text into smaller chunks.
+3. Converts chunks to embedding vectors and stores them with their metadata.
+4. Embeds a question and retrieves the three most similar chunks from pgvector using cosine distance.
+5. Sends the question and retrieved context to the chat model with instructions to answer from that context.
 
-Anyone can run this entire project (database + AI backend) with **one single command** using Docker Desktop:
+The retrieved context grounds the answer, but this does not guarantee that a model will always be correct. Use representative documents and questions when evaluating results.
 
-```bash
-docker compose up --build -d
-```
-
-*(No Java, Maven, or PostgreSQL installation required on your host machine!)*
-
----
-
-## 🏗️ Architecture & Workflow
+## Backend execution flow
 
 ```mermaid
 flowchart TD
-    User["User / Postman / Browser"] -- "1. Upload PDF (POST /upload)" --> App["Spring Boot Backend"]
-    App -- "In-Memory Streaming & Chunking" --> Splitter["TokenTextSplitter"]
-    Splitter -- "Generate 768-dim Vector Embeddings" --> Embeddings["Embedding Model"]
-    Embeddings -- "Persist Vectors & Chunk Metadata" --> DB[("PostgreSQL (pgvector)")]
+    Upload[POST /upload: PDF] --> Read[PDFBox reads pages]
+    Read --> Split[TokenTextSplitter creates chunks]
+    Split --> Embeddings{Embedding provider}
+    Embeddings -->|Primary| GEmbed[Google Gemini embeddings]
+    Embeddings -->|Google error| OEmbed[Ollama nomic-embed-text]
+    GEmbed --> SaveVector[(PostgreSQL pgvector)]
+    OEmbed --> SaveVector
 
-    Browser["User / Chrome or Postman"] -- "2. Ask Question (GET /rag?question=...)" --> App
-    App -- "Similarity Search (Cosine Distance)" --> DB
-    DB -- "Top-3 Relevant Context Chunks" --> App
-    App -- "1st Choice: Google Gemini" --> Gemini{"Gemini Available & Within Quota?"}
-    Gemini -- "Yes (Success)" --> GeminiModel["Google Gemini (gemini-3.8-flash)"]
-    Gemini -- "Quota / Token Limit / Provider Error" --> QwenModel["Local Ollama (qwen2.5:3b-instruct)"]
-    GeminiModel --> Answer["Accurate Answer grounded strictly in PDF"]
-    QwenModel --> Answer
+    Question[GET /rag?question=...] --> SaveQuestion[Insert question and pending answer]
+    SaveQuestion --> HistoryDB[(PostgreSQL chat_history)]
+    SaveQuestion --> Search[Embed question and similarity-search top 3]
+    Search --> SaveVector
+    SaveVector --> Context[Retrieved document chunks]
+    Context --> Chat{Chat provider}
+    Chat -->|Primary| Gemini[Gemini Flash-Lite]
+    Gemini -->|Success| StoreAnswer[Update saved history answer]
+    Gemini -->|Eligible quota, provider, or network failure| Qwen[Ollama Qwen chat fallback]
+    Qwen --> StoreAnswer
+    StoreAnswer --> HistoryDB
+    StoreAnswer --> Return[Return answer to caller]
+
+    Startup[Flutter app starts] -->|GET /history| HistoryAPI[History endpoint]
+    HistoryAPI --> HistoryDB
+    HistoryDB -->|Saved questions and answers| Sidebar[Flutter history sidebar]
 ```
 
-1. **Upload Phase**: A PDF is uploaded via `POST /upload`. It is streamed in-memory, chunked, converted to 768-dimensional vector embeddings, and stored in PostgreSQL with the `pgvector` extension.
-2. **Query Phase**: When a question is asked via `GET /rag?question=...`, the application queries `pgvector` for the top matching document chunks and constructs a strict prompt for the LLM.
-3. **Dual-Model Execution**: The application attempts **Google Gemini** first. If Gemini succeeds, the answer is returned directly. If Gemini fails due to quota limits, rate limits, token limits, or network timeouts, the system logs the event and seamlessly shifts to local **Qwen (Ollama)** to generate the answer.
+The embedding and chat provider selectors are separate. Gemini is preferred when configured; Ollama is the fallback when the corresponding provider call fails in a supported way. Ollama chat uses Qwen (`qwen2.5:3b-instruct`), not a Llama model. The backend records a question before generation and updates its answer afterward, so it can still show a failure message in history if generation fails. The history table and vector table share the PostgreSQL database and persist through container restarts while the named volume is kept.
 
----
+## Backend stack
 
-## 📋 Prerequisites
+- Java 21
+- Spring Boot 4.1.1 and Spring AI 2.0.1
+- Spring MVC REST endpoints
+- Apache PDFBox through Spring AI's PDF document reader
+- Spring AI `TokenTextSplitter` for document chunking
+- PostgreSQL 16 with the pgvector extension for vector storage and similarity search
+- Google Gemini Flash-Lite (`gemini-3.5-flash-lite`) as the preferred chat model, and Gemini embedding for vectors
+- Ollama as fallback, configured with Qwen 2.5 3B Instruct for chat and `nomic-embed-text` for embeddings
+- Docker Compose for the API and database; Maven builds the backend image in the Dockerfile's build stage
 
-To run this project on any computer, you only need:
+The Google embedding wrapper requests 768-dimensional vectors to match the pgvector schema. The custom embedding selector tries Gemini and falls back to Ollama on embedding errors. Chat uses Gemini first when configured, then tries Ollama on eligible provider/quota/network errors. Chat and embedding provider selection are implemented separately.
 
-1. **Docker Desktop**:
-   - [Download Docker Desktop](https://www.docker.com/products/docker-desktop/) (Windows with WSL 2, macOS, or Linux).
-   - Make sure Docker Desktop is running before executing commands.
-2. **Git**:
-   - [Download Git](https://git-scm.com/downloads).
-3. **AI Provider Credentials / Models**:
-   - **Google Gemini (Primary)**: Get a free API key from [Google AI Studio](https://aistudio.google.com/).
-   - **Ollama (Local Fallback)**:
-     - Install [Ollama](https://ollama.com/).
-     - Pull the required models:
-       ```bash
-       ollama pull qwen2.5:3b-instruct
-       ollama pull nomic-embed-text
-       ```
+## Tokenization and chunking
 
----
+`pdfUpload` uses Spring AI's `TokenTextSplitter` to break extracted PDF text into manageable chunks before embedding. This is application-side chunking; this project does not load or call a Llama tokenizer directly. The splitter is not switched based on whether Gemini or Ollama is selected.
 
-## 🚀 Execution Guide
+After chunking, the chosen embedding provider converts each chunk into a vector. During question answering, the provider embeds the search query; pgvector searches for the nearest stored vectors. The chat model provider then processes the retrieved text. Gemini and Ollama/Qwen handle their own model tokenization internally when they process embeddings or chat prompts. In this project, the Ollama chat model is Qwen, not a Llama model.
 
-### Step 1: Clone the Repository
-```bash
-git clone https://github.com/Chandrasekhar-maker/RAG_System.git
-cd RAG_System/document-rag/document-rag
-```
+## API endpoints
 
-*(Note: Depending on whether you cloned the root repository or entered the subfolder, navigate to the folder containing `docker-compose.yml`, `Dockerfile`, and `pom.xml`).*
+| Method | Endpoint | Purpose |
+|---|---|---|
+| `POST` | `/upload` | Accept a multipart PDF in the `file` field, parse it, split it, embed it, and store the chunks. |
+| `GET` | `/rag?question=...` | Retrieve up to three relevant chunks and return a generated answer. |
+| `GET` | `/history` | Return saved questions and answers, newest first. |
 
----
+Upload example:
 
-### Step 2: Configure Environment Variables (`.env`)
-
-Create your `.env` file from the provided `.env.example`:
-
-```powershell
-# Windows PowerShell
-Copy-Item .env.example .env
-
-# macOS / Linux / Git Bash
-cp .env.example .env
-```
-
-Open `.env` in any text editor and fill in your values:
-
-```env
-# Database password
-DB_PASSWORD=mysecretpassword
-
-# Primary AI Model: Google Gemini API key
-GEMINI_API_KEY=AIzaSy...your_actual_gemini_key
-GEMINI_CHAT_MODEL=gemini-3.8-flash
-
-# Fallback AI Model: Local Ollama (Qwen)
-OLLAMA_BASE_URL=http://host.docker.internal:11434
-OLLAMA_CHAT_MODEL=qwen2.5:3b-instruct
-OLLAMA_EMBEDDING_MODEL=nomic-embed-text
-```
-
-> [!NOTE]
-> `http://host.docker.internal:11434` allows the Docker container to access the Ollama server running on your host machine.
-
----
-
-### Step 3: Run with Docker Compose (Recommended)
-
-Start both PostgreSQL (with pgvector) and the Spring Boot application:
-
-```bash
-docker compose up --build -d
-```
-
-Verify that both containers are running healthy:
-```bash
-docker compose ps
-```
-
-Check application logs in real time:
-```bash
-docker compose logs -f app
-```
-*(Press `Ctrl + C` to exit log viewing; the containers remain running).*
-
----
-
-### Step 3 (Alternative): Run Using Standalone Dockerfile
-
-If you want to build and run the Spring Boot application container directly using the `Dockerfile`:
-
-1. **Start PostgreSQL with PGVector**:
-   ```bash
-   docker run -d \
-     --name rag-postgres \
-     -e POSTGRES_DB=postgres \
-     -e POSTGRES_USER=postgres \
-     -e POSTGRES_PASSWORD=mysecretpassword \
-     -p 5432:5432 \
-     pgvector/pgvector:pg16
-   ```
-
-2. **Build the Docker image**:
-   ```bash
-   docker build -t document-rag-app .
-   ```
-
-3. **Run the application container**:
-   ```bash
-   docker run -d \
-     --name rag-app \
-     -p 8080:8080 \
-     --add-host host.docker.internal:host-gateway \
-     -e SPRING_DATASOURCE_URL=jdbc:postgresql://host.docker.internal:5432/postgres \
-     -e SPRING_DATASOURCE_USERNAME=postgres \
-     -e SPRING_DATASOURCE_PASSWORD=mysecretpassword \
-     -e GEMINI_API_KEY=your_actual_gemini_key \
-     -e GEMINI_CHAT_MODEL=gemini-3.8-flash \
-     -e OLLAMA_BASE_URL=http://host.docker.internal:11434 \
-     -e OLLAMA_CHAT_MODEL=qwen2.5:3b-instruct \
-     document-rag-app
-   ```
-
----
-
-### Step 3 (Alternative): Run Locally with Maven Wrapper
-
-If you have Java 21 installed and wish to run without containerizing the Java app:
-
-1. Start PostgreSQL (e.g. via Docker: `docker run -d -p 5432:5432 -e POSTGRES_PASSWORD=postgres pgvector/pgvector:pg16`).
-2. Run the application:
-   ```bash
-   # Windows PowerShell
-   $env:DB_PASSWORD="postgres"; .\mvnw.cmd spring-boot:run
-
-   # Linux / macOS
-   DB_PASSWORD=postgres ./mvnw spring-boot:run
-   ```
-
----
-
-## 📮 Using the Application
-
-### 1. Import Postman Collection (1-Click)
-A ready-to-use Postman collection is included: `RAG_System.postman_collection.json`.
-
-1. Open **Postman**.
-2. Click **Import** (top left).
-3. Select or drag & drop **`RAG_System.postman_collection.json`**.
-4. Both requests (`1. Upload PDF` and `2. Ask Question (RAG)`) are immediately available.
-
----
-
-### 2. Upload a PDF Document
-
-#### Option A: Postman
-1. Select the **`1. Upload PDF`** request (`POST http://localhost:8080/upload`).
-2. Under the **Body** tab, choose **form-data**.
-3. For key `file`, set type to **File**, and select any PDF document.
-4. Click **Send**.
-5. Response:
-   ```text
-   Successfully uploaded and stored 4 chunks from sample.pdf
-   ```
-
-#### Option B: cURL
 ```bash
 curl -X POST http://localhost:8080/upload \
-  -F "file=@/path/to/your/document.pdf"
+  -F "file=@/path/to/document.pdf"
 ```
 
----
+Question example:
 
-### 3. Ask Questions (RAG Query)
-
-#### Option A: Web Browser (Chrome / Edge / Firefox)
-Type your question directly into your browser address bar:
 ```text
-http://localhost:8080/rag?question=What are the main findings in the document?
+http://localhost:8080/rag?question=What%20does%20the%20document%20say%3F
 ```
-The grounded answer is displayed directly on screen.
 
-#### Option B: Postman
-1. Select **`2. Ask Question (RAG)`** (`GET http://localhost:8080/rag`).
-2. In the **Params** tab, enter your query in the `question` value field.
-3. Click **Send** to view the response.
+The `/rag` controller currently waits for the complete model response before returning it; it does not stream answer tokens to the client.
 
-#### Option C: cURL
+Every `/rag` question is saved to the PostgreSQL `chat_history` table before generation begins, then its answer (or a failure message) is saved when processing finishes. The table is created automatically on backend startup. Records survive app/container restarts as long as the Compose database volume is kept. Questions asked before this feature was installed cannot be reconstructed; existing uploaded-document vectors remain in their current database volume.
+
+## Configuration and running
+
+For running the whole project on a local computer, follow the root [project README](../../README.md). The recommended Compose file is at the repository root and builds this backend with `Dockerfile`.
+
+This directory also contains a standalone `docker-compose.yml`. If using that file, first place a `.env` file here (copy `.env.example` and set the values), then run:
+
 ```bash
-curl "http://localhost:8080/rag?question=What+are+the+main+findings?"
+docker compose up --build -d
+docker compose ps
+docker compose logs -f app
 ```
 
----
+The API is published on port 8080 and PostgreSQL on port 5432. Do not run the root Compose stack and this nested stack at the same time: they publish the same ports and declare the same explicit container names.
 
-## 🌿 Git Branching Workflow (Collaboration Guide)
+Important environment values:
 
-When collaborating on new features or improvements, follow this clean branching workflow:
+- `DB_PASSWORD` — PostgreSQL password.
+- `GEMINI_API_KEY` — Gemini key; without it, chat uses Ollama if reachable.
+- `GEMINI_CHAT_MODEL` — Gemini chat model name.
+- `GEMINI_MAX_OUTPUT_TOKENS` — output limit for Gemini; defaults to 512 tokens to keep answers focused.
+- `OLLAMA_BASE_URL` — defaults to `http://host.docker.internal:11434` for Ollama running on the host.
+- `OLLAMA_CHAT_MODEL` — defaults to `qwen2.5:3b-instruct`.
+- `OLLAMA_EMBEDDING_MODEL` — defaults to `nomic-embed-text`.
+- `APP_RAG_REFINER_ENABLED` — defaults to `false` to avoid an extra sequential LLM call. Set to `true` to enable answer polishing.
+- `OLLAMA_NUM_PREDICT` — maximum Ollama generated tokens; defaults to 512.
+- `SPRING_AI_RETRY_MAX_ATTEMPTS` — defaults to 2; short backoff defaults help provider failures reach the fallback quickly instead of waiting through long retry delays.
 
-```mermaid
-flowchart TD
-    A["main branch (Stable Code)"] -- "1. git pull origin main" --> A
-    A -- "2. git checkout -b feature/my-feature" --> B["New Branch (Has latest main code)"]
-    B -- "3. Edit code & test with docker compose" --> B
-    B -- "4a. Succeeded?" --> C{"Works as expected?"}
-    C -- "Yes" --> D["Commit & push branch<br/>git push origin feature/my-feature"]
-    D -- "5. Open Pull Request on GitHub" --> E["Merge into main"]
-    C -- "No / Aborted" --> F["Discard or delete branch<br/>git branch -D feature/my-feature"]
+For local Ollama fallback, install Ollama and fetch the models on the host:
+
+```bash
+ollama pull qwen2.5:3b-instruct
+ollama pull nomic-embed-text
 ```
 
-1. **Pull Latest Main**:
-   ```bash
-   git checkout main
-   git pull origin main
-   ```
-2. **Create a Feature Branch**:
-   ```bash
-   git checkout -b feature/my-new-feature
-   ```
-3. **Make and Test Changes**:
-   ```bash
-   docker compose up --build -d
-   ```
-4. **Commit and Push**:
-   ```bash
-   git add .
-   git commit -m "feat: describe your change"
-   git push origin feature/my-new-feature
-   ```
-5. **Open Pull Request on GitHub** $\rightarrow$ Merge into `main`.
+Do not commit `.env` files or expose API keys.
 
----
+## Backend source map
 
-## 🛠️ Management & Troubleshooting Commands
-
-| Task | Command |
+| File | Responsibility |
 |---|---|
-| **Start everything (in background)** | `docker compose up --build -d` |
-| **Check container health & status** | `docker compose ps` |
-| **Stream application logs** | `docker compose logs -f app` |
-| **Stream PostgreSQL logs** | `docker compose logs -f postgres` |
-| **Stop all containers** | `docker compose down` |
-| **Stop and wipe vector database data** | `docker compose down -v` |
-| **Rebuild after code edits** | `docker compose up --build -d` |
-| **Run unit tests locally** | `.\mvnw.cmd test` *(or `./mvnw test` on Linux/macOS)* |
+| `src/main/java/com/rag/document_rag/DocumentRagApplication.java` | Spring Boot application entry point and component scanning root. |
+| `src/main/java/com/rag/document_rag/controller/pdfUpload.java` | Handles `POST /upload`, PDF parsing, chunk splitting, and vector-store insertion. |
+| `src/main/java/com/rag/document_rag/controller/Ragcontroller.java` | Handles `GET /rag`, similarity search, prompt construction, and answer return. |
+| `src/main/java/com/rag/document_rag/history/ChatHistoryRepository.java` | Creates the history table and stores/loads questions and answers in PostgreSQL. |
+| `src/main/java/com/rag/document_rag/history/ChatHistoryEntry.java` | API data record for a saved question, answer, ID, and timestamp. |
+| `src/main/java/com/rag/document_rag/config/ConditionalChatClientConfig.java` | Builds the Gemini-first/Ollama-fallback chat client and optional answer refiner. |
+| `src/main/java/com/rag/document_rag/config/CorsConfig.java` | Configures cross-origin requests for the Flutter web client. |
+| `src/main/java/com/rag/document_rag/embedding/ConditionalEmbeddingModel.java` | Selects Gemini embeddings and falls back to Ollama if embedding fails. |
+| `src/main/java/com/rag/document_rag/embedding/GoogleGenAiEmbeddingModel.java` | Calls Google's GenAI embedding API and requests the configured 768 dimensions. |
+| `src/main/resources/application.properties` | Default AI, datasource, vector-store, and answer-refiner settings. |
+| `pom.xml` | Java dependencies and Maven build configuration. |
+| `Dockerfile` | Builds the jar in a Maven/Java 21 image and runs it in a Java 21 runtime image. |
+| `docker-compose.yml` | Standalone PostgreSQL and backend services for this folder. |
+| `src/test/java/com/rag/document_rag/config/ConditionalChatClientConfigTest.java` | Unit tests for model choice, fallback, and response refinement. |
+| `src/test/java/com/rag/document_rag/DocumentRagApplicationTests.java` | Spring application context test. |
 
----
+## Tests and operations
 
-## 💾 Data Persistence
+Run backend tests with Java 21 available on the host:
 
-- Document vectors and chunk metadata are persisted in the Docker named volume `postgres_data`.
-- Running `docker compose down` will **never lose your uploaded documents**. Your embeddings remain intact and ready when you start the containers again.
+```powershell
+.\mvnw.cmd test
+```
+
+On macOS/Linux:
+
+```bash
+./mvnw test
+```
+
+Useful Compose commands (run in this directory if using this folder's stack):
+
+```bash
+docker compose ps
+docker compose logs -f app
+docker compose logs -f postgres
+docker compose stop       # Stop, keep containers and data
+docker compose start      # Restart stopped containers
+docker compose down       # Remove containers/network, keep named database volume
+docker compose down -v    # Also delete PostgreSQL data and uploaded vectors
+```

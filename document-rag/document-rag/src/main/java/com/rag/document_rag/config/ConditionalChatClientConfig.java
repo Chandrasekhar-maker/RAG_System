@@ -33,7 +33,7 @@ import reactor.core.publisher.Flux;
 
 /**
  * Intelligent Dual-Model ChatClient Configuration with Two-Stage Human-Readability Refinement:
- * 1. Primary Preference: Google Gemini (gemini-3.8-flash)
+ * 1. Primary Preference: Google Gemini Flash-Lite
  * 2. Automatic Shift: If Gemini token limit or quota is completed / exceeded / unavailable, shifts to Qwen (Ollama)
  * 3. Stage-2 Refiner (Additive): Automatically refines technical Markdown/LaTeX and clumsy symbols into natural, readable prose.
  */
@@ -82,7 +82,7 @@ public class ConditionalChatClientConfig {
             @Value("${spring.ai.google.genai.api-key:${GEMINI_API_KEY:}}") String geminiApiKey,
             @Value("${spring.ai.ollama.base-url:http://localhost:11434}") String ollamaBaseUrl,
             @Value("${spring.ai.ollama.chat.options.model:${spring.ai.ollama.chat.model:${OLLAMA_CHAT_MODEL:qwen2.5:3b-instruct}}}") String ollamaModelName,
-            @Value("${app.rag.refiner.enabled:true}") boolean refinerEnabled) {
+            @Value("${app.rag.refiner.enabled:false}") boolean refinerEnabled) {
 
         ChatModel resilientChatModel = new ChatModel() {
             private volatile OllamaChatModel fallbackOllamaChatModel;
@@ -410,12 +410,15 @@ public class ConditionalChatClientConfig {
                 if (isGeminiConfigured()) {
                     GoogleGenAiChatModel geminiModel = geminiChatModelProvider.getIfAvailable();
                     if (geminiModel != null) {
+                        long geminiStartedAt = System.nanoTime();
                         try {
                             log.info("Generating response with Primary model: Google Gemini...");
                             Prompt geminiPrompt = preparePromptForGemini(prompt, geminiModel);
                             ChatResponse response = geminiModel.call(geminiPrompt);
+                            log.info("Google Gemini completed in {} ms", (System.nanoTime() - geminiStartedAt) / 1_000_000);
                             return new RawExecutionResult(response, ModelSource.GEMINI);
                         } catch (Exception ex) {
+                            log.warn("Google Gemini failed after {} ms", (System.nanoTime() - geminiStartedAt) / 1_000_000);
                             if (!isFallbackEligible(ex)) {
                                 log.error("Gemini invocation failed due to an unrelated programming or prompt error: {}",
                                         ex.getMessage(), ex);
@@ -437,11 +440,13 @@ public class ConditionalChatClientConfig {
                 }
 
                 // Fallback / Shift: Qwen via Ollama
+                long ollamaStartedAt = System.nanoTime();
                 try {
                     log.info("Generating response with Fallback model: Qwen (Ollama - {})...", ollamaModelName);
                     OllamaChatModel ollamaModel = getOllamaModel();
                     Prompt ollamaPrompt = preparePromptForOllama(prompt, ollamaModel);
                     ChatResponse response = ollamaModel.call(ollamaPrompt);
+                    log.info("Ollama chat completed in {} ms", (System.nanoTime() - ollamaStartedAt) / 1_000_000);
                     return new RawExecutionResult(response, ModelSource.OLLAMA);
                 } catch (Exception ollamaEx) {
                     log.error("Fallback model (Qwen/Ollama - {}) also failed: {}", ollamaModelName, ollamaEx.getMessage(), ollamaEx);

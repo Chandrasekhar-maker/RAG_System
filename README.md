@@ -1,299 +1,182 @@
-# Document RAG System (Spring Boot + Spring AI + Docker)
+# Document RAG Assistant
 
-A resilient, production-ready **Retrieval-Augmented Generation (RAG)** backend application built with **Java 21**, **Spring Boot 4.x**, **Spring AI 2.0.x**, and **PostgreSQL with PGVector**.
+A PDF question-answering project with a Flutter web interface, a Java/Spring Boot API, and PostgreSQL with pgvector. The backend and database run in Docker. The Flutter development server runs on your computer.
 
-The application features **Smart Dual-Model Failover**:
-- 🥇 **Primary Model**: **Google Gemini (`gemini-3.8-flash`)** for fast, high-quality, cloud-powered reasoning.
-- 🔄 **Automatic Shift / Fallback**: If Gemini's quota is exhausted, rate limit is hit, token limit is exceeded, or a temporary provider error occurs, the system automatically shifts to local **Qwen (`qwen2.5:3b-instruct` via Ollama)** without crashing, losing state, or dropping user requests!
-- 🛡️ **Resilient Configuration**: Proper option isolation ensures Gemini receives its native `GoogleGenAiChatOptions` while Ollama receives valid `OllamaChatOptions` with the model name explicitly set, preventing casting and null-model errors.
-
----
-
-## ⚡ 1-Command Quick Start (Docker Desktop)
-
-Anyone can run this entire project (database + AI backend) with **one single command** using Docker Desktop:
-
-```bash
-docker compose up --build -d
-```
-
-*(No Java, Maven, or PostgreSQL installation required on your host machine!)*
-
----
-
-## 🏗️ Architecture & Workflow
+## Project execution flow
 
 ```mermaid
 flowchart TD
-    User["User / Postman / Browser"] -- "1. Upload PDF (POST /upload)" --> App["Spring Boot Backend"]
-    App -- "In-Memory Streaming & Chunking" --> Splitter["TokenTextSplitter"]
-    Splitter -- "Generate 768-dim Vector Embeddings" --> Embeddings["Embedding Model"]
-    Embeddings -- "Persist Vectors & Chunk Metadata" --> DB[("PostgreSQL (pgvector)")]
-
-    Browser["User / Chrome or Postman"] -- "2. Ask Question (GET /rag?question=...)" --> App
-    App -- "Similarity Search (Cosine Distance)" --> DB
-    DB -- "Top-3 Relevant Context Chunks" --> App
-    App -- "1st Choice: Google Gemini" --> Gemini{"Gemini Available & Within Quota?"}
-    Gemini -- "Yes (Success)" --> GeminiModel["Google Gemini (gemini-3.8-flash)"]
-    Gemini -- "Quota / Token Limit / Provider Error" --> QwenModel["Local Ollama (qwen2.5:3b-instruct)"]
-    GeminiModel --> Answer["Accurate Answer grounded strictly in PDF"]
-    QwenModel --> Answer
+    User[User in Flutter web app] -->|Upload PDF: POST /upload| API[Spring Boot API :8080]
+    API -->|Parse and split PDF| Embed[Gemini embeddings, or Ollama fallback]
+    Embed -->|Save chunks and vectors| DB[(PostgreSQL with pgvector)]
+    User -->|Ask: GET /rag?question=...| API
+    API -->|Save question as pending| DB
+    API -->|Vector similarity search: top 3 chunks| DB
+    DB -->|Relevant document context| API
+    API --> Chat{Gemini chat responds?}
+    Chat -->|Yes| Gemini[Gemini Flash-Lite]
+    Chat -->|Eligible provider, quota, or network failure| Ollama[Ollama with Qwen]
+    Gemini -->|Answer| API
+    Ollama -->|Answer| API
+    API -->|Save answer, then return it| DB
+    API -->|HTTP response| User
+    User -->|On app startup: GET /history| API
+    API -->|Saved questions and answers| DB
+    DB -->|History list| API
 ```
 
-1. **Upload Phase**: A PDF is uploaded via `POST /upload`. It is streamed in-memory, chunked, converted to 768-dimensional vector embeddings, and stored in PostgreSQL with the `pgvector` extension.
-2. **Query Phase**: When a question is asked via `GET /rag?question=...`, the application queries `pgvector` for the top matching document chunks and constructs a strict prompt for the LLM.
-3. **Dual-Model Execution**: The application attempts **Google Gemini** first. If Gemini succeeds, the answer is returned directly. If Gemini fails due to quota limits, rate limits, token limits, or network timeouts, the system logs the event and seamlessly shifts to local **Qwen (Ollama)** to generate the answer.
+The frontend uses HTTP calls to the backend; AI models run in the backend. PostgreSQL keeps document vectors and question history in the Docker named volume.
 
----
+## What you need
 
-## 📋 Prerequisites
+- [Git](https://git-scm.com/downloads)
+- [Docker Desktop](https://www.docker.com/products/docker-desktop/) with Docker Compose; start Docker Desktop before running commands
+- A [Google AI Studio](https://aistudio.google.com/) Gemini API key, or [Ollama](https://ollama.com/download) running on your computer with the models below
+- [Flutter SDK](https://docs.flutter.dev/get-started/install) only if you want to run the web UI; the backend-only API can run without Flutter
 
-To run this project on any computer, you only need:
+Java, Maven, and PostgreSQL do not need to be installed on your computer when you use Docker Compose. The Dockerfile builds the Java service with Maven inside a build container.
 
-1. **Docker Desktop**:
-   - [Download Docker Desktop](https://www.docker.com/products/docker-desktop/) (Windows with WSL 2, macOS, or Linux).
-   - Make sure Docker Desktop is running before executing commands.
-2. **Git**:
-   - [Download Git](https://git-scm.com/downloads).
-3. **AI Provider Credentials / Models**:
-   - **Google Gemini (Primary)**: Get a free API key from [Google AI Studio](https://aistudio.google.com/).
-   - **Ollama (Local Fallback)**:
-     - Install [Ollama](https://ollama.com/).
-     - Pull the required models:
-       ```bash
-       ollama pull qwen2.5:3b-instruct
-       ollama pull nomic-embed-text
-       ```
+## Clone the project
 
----
+The backend is included in this repository at `document-rag/document-rag`; it is not a separate Git submodule.
 
-## 🚀 Execution Guide
-
-### Step 1: Clone the Repository
 ```bash
 git clone https://github.com/Chandrasekhar-maker/RAG_System.git
-cd RAG_System/document-rag/document-rag
+cd RAG_System
 ```
 
-*(Note: Depending on whether you cloned the root repository or entered the subfolder, navigate to the folder containing `docker-compose.yml`, `Dockerfile`, and `pom.xml`).*
+## Configure AI access
 
----
-
-### Step 2: Configure Environment Variables (`.env`)
-
-Create your `.env` file from the provided `.env.example`:
+Copy the example environment file at the repository root:
 
 ```powershell
 # Windows PowerShell
 Copy-Item .env.example .env
+```
 
-# macOS / Linux / Git Bash
+```bash
+# macOS / Linux
 cp .env.example .env
 ```
 
-Open `.env` in any text editor and fill in your values:
+Edit `.env` and set a strong `DB_PASSWORD`. For cloud generation, set `GEMINI_API_KEY` to a key from Google AI Studio. The default chat model is `gemini-3.5-flash-lite`; change `GEMINI_CHAT_MODEL` to select another available model. The default output cap is 512 tokens (`GEMINI_MAX_OUTPUT_TOKENS` / `OLLAMA_NUM_PREDICT`).
 
-```env
-# Database password
-DB_PASSWORD=mysecretpassword
+For local Ollama fallback, install Ollama on the host and download the configured models:
 
-# Primary AI Model: Google Gemini API key
-GEMINI_API_KEY=AIzaSy...your_actual_gemini_key
-GEMINI_CHAT_MODEL=gemini-3.8-flash
-
-# Fallback AI Model: Local Ollama (Qwen)
-OLLAMA_BASE_URL=http://host.docker.internal:11434
-OLLAMA_CHAT_MODEL=qwen2.5:3b-instruct
-OLLAMA_EMBEDDING_MODEL=nomic-embed-text
+```bash
+ollama pull qwen2.5:3b-instruct
+ollama pull nomic-embed-text
 ```
 
-> [!NOTE]
-> `http://host.docker.internal:11434` allows the Docker container to access the Ollama server running on your host machine.
+The default `OLLAMA_BASE_URL=http://host.docker.internal:11434` lets the backend container reach Ollama on the host. Ollama is optional when Gemini is configured and reachable. Never commit your `.env` or publish your API key.
 
----
+## Run the backend and database with Docker
 
-### Step 3: Run with Docker Compose (Recommended)
+Run these commands from the repository root (the folder containing this README and the root `docker-compose.yml`):
 
-Start both PostgreSQL (with pgvector) and the Spring Boot application:
+```bash
+docker compose up --build -d
+docker compose ps
+docker compose logs -f app
+```
+
+The first command builds the Spring Boot image and starts the API and pgvector database. The API is published at `http://localhost:8080`. Press Ctrl+C to stop following logs; containers keep running.
+
+The Compose stack does not run Flutter. To use the UI, install Flutter, open another terminal, then run:
+
+```powershell
+cd rag_frontend
+flutter pub get
+flutter run -d web-server --web-port 8081
+```
+
+Open `http://localhost:8081`. The frontend calls the API at `http://localhost:8080`. Keep the Flutter command running while using the page. For API-only use, skip these Flutter steps.
+
+## Try the API
+
+Upload a PDF (PowerShell or a terminal with `curl`):
+
+```bash
+curl -X POST http://localhost:8080/upload -F "file=@/path/to/document.pdf"
+```
+
+Ask a question after uploading a document:
+
+```text
+http://localhost:8080/rag?question=What%20are%20the%20main%20points%3F
+```
+
+The Flutter app loads the saved question/answer history from `GET /history` when it starts. Each new question and its answer are stored in PostgreSQL, so they remain available after restarting the API or database container as long as you keep the Docker volume. Questions asked before history was added are not recoverable. `docker compose down -v` deletes this history together with the database volume.
+
+The first request may take longer while an AI provider responds. By default, the app uses Gemini Flash-Lite, caps output at 512 tokens, disables the optional second polishing call, and limits provider retries with short backoff before trying Ollama. These settings reduce avoidable work and fallback delays, but cannot control the provider's own response time. Set `APP_RAG_REFINER_ENABLED=true` in `.env` to enable answer polishing, then recreate the backend with `docker compose up -d --force-recreate app`.
+
+## Work with branches and contribute
+
+Start from the current main branch and create a branch for each task:
+
+```bash
+git switch main
+git pull origin main
+git switch -c feature/describe-your-change
+```
+
+```mermaid
+flowchart LR
+    Main[main: latest stable code] -->|pull latest, create feature branch| Feature[feature branch]
+    Feature -->|implement and run checks| Review{Checks pass?}
+    Review -->|No: fix on feature branch| Feature
+    Review -->|Yes: commit and push| PR[Open pull request]
+    PR -->|Review and merge| Main
+```
+
+Make your changes, run the relevant checks, and rebuild the backend if you changed backend code:
 
 ```bash
 docker compose up --build -d
 ```
 
-Verify that both containers are running healthy:
+For backend tests, Java 21 is required if running them on the host:
+
+```powershell
+cd document-rag\document-rag
+.\mvnw.cmd test
+```
+
+On macOS/Linux, use `./mvnw test`. Flutter checks require Flutter SDK and run from `rag_frontend`:
+
 ```bash
-docker compose ps
+flutter analyze
+flutter test
 ```
 
-Check application logs in real time:
+Commit and push your branch, then open a pull request on GitHub:
+
 ```bash
-docker compose logs -f app
+git add README.md document-rag rag_frontend
+git commit -m "docs: describe the RAG project"
+git push -u origin feature/describe-your-change
 ```
-*(Press `Ctrl + C` to exit log viewing; the containers remain running).*
 
----
+Review the files you stage before committing so local secrets, generated files, and unrelated changes are not included.
 
-### Step 3 (Alternative): Run Using Standalone Dockerfile
+## Useful Docker commands
 
-If you want to build and run the Spring Boot application container directly using the `Dockerfile`:
+Run from the repository root:
 
-1. **Start PostgreSQL with PGVector**:
-   ```bash
-   docker run -d \
-     --name rag-postgres \
-     -e POSTGRES_DB=postgres \
-     -e POSTGRES_USER=postgres \
-     -e POSTGRES_PASSWORD=mysecretpassword \
-     -p 5432:5432 \
-     pgvector/pgvector:pg16
-   ```
-
-2. **Build the Docker image**:
-   ```bash
-   docker build -t document-rag-app .
-   ```
-
-3. **Run the application container**:
-   ```bash
-   docker run -d \
-     --name rag-app \
-     -p 8080:8080 \
-     --add-host host.docker.internal:host-gateway \
-     -e SPRING_DATASOURCE_URL=jdbc:postgresql://host.docker.internal:5432/postgres \
-     -e SPRING_DATASOURCE_USERNAME=postgres \
-     -e SPRING_DATASOURCE_PASSWORD=mysecretpassword \
-     -e GEMINI_API_KEY=your_actual_gemini_key \
-     -e GEMINI_CHAT_MODEL=gemini-3.8-flash \
-     -e OLLAMA_BASE_URL=http://host.docker.internal:11434 \
-     -e OLLAMA_CHAT_MODEL=qwen2.5:3b-instruct \
-     document-rag-app
-   ```
-
----
-
-### Step 3 (Alternative): Run Locally with Maven Wrapper
-
-If you have Java 21 installed and wish to run without containerizing the Java app:
-
-1. Start PostgreSQL (e.g. via Docker: `docker run -d -p 5432:5432 -e POSTGRES_PASSWORD=postgres pgvector/pgvector:pg16`).
-2. Run the application:
-   ```bash
-   # Windows PowerShell
-   $env:DB_PASSWORD="postgres"; .\mvnw.cmd spring-boot:run
-
-   # Linux / macOS
-   DB_PASSWORD=postgres ./mvnw spring-boot:run
-   ```
-
----
-
-## 📮 Using the Application
-
-### 1. Import Postman Collection (1-Click)
-A ready-to-use Postman collection is included: `RAG_System.postman_collection.json`.
-
-1. Open **Postman**.
-2. Click **Import** (top left).
-3. Select or drag & drop **`RAG_System.postman_collection.json`**.
-4. Both requests (`1. Upload PDF` and `2. Ask Question (RAG)`) are immediately available.
-
----
-
-### 2. Upload a PDF Document
-
-#### Option A: Postman
-1. Select the **`1. Upload PDF`** request (`POST http://localhost:8080/upload`).
-2. Under the **Body** tab, choose **form-data**.
-3. For key `file`, set type to **File**, and select any PDF document.
-4. Click **Send**.
-5. Response:
-   ```text
-   Successfully uploaded and stored 4 chunks from sample.pdf
-   ```
-
-#### Option B: cURL
 ```bash
-curl -X POST http://localhost:8080/upload \
-  -F "file=@/path/to/your/document.pdf"
+docker compose ps                  # See service state
+docker compose logs -f app         # Follow backend logs
+docker compose logs -f postgres    # Follow database logs
+docker compose stop                # Stop services, preserve containers and data
+docker compose start               # Start stopped services
+docker compose down                # Stop and remove containers/network; preserve named DB volume
+docker compose down -v             # Also delete the database volume and uploaded vectors
 ```
 
----
+Uploaded document vectors are stored in the named `postgres_data` volume. `down -v` permanently deletes that volume.
 
-### 3. Ask Questions (RAG Query)
+## Project folders
 
-#### Option A: Web Browser (Chrome / Edge / Firefox)
-Type your question directly into your browser address bar:
-```text
-http://localhost:8080/rag?question=What are the main findings in the document?
-```
-The grounded answer is displayed directly on screen.
-
-#### Option B: Postman
-1. Select **`2. Ask Question (RAG)`** (`GET http://localhost:8080/rag`).
-2. In the **Params** tab, enter your query in the `question` value field.
-3. Click **Send** to view the response.
-
-#### Option C: cURL
-```bash
-curl "http://localhost:8080/rag?question=What+are+the+main+findings?"
-```
-
----
-
-## 🌿 Git Branching Workflow (Collaboration Guide)
-
-When collaborating on new features or improvements, follow this clean branching workflow:
-
-```mermaid
-flowchart TD
-    A["main branch (Stable Code)"] -- "1. git pull origin main" --> A
-    A -- "2. git checkout -b feature/my-feature" --> B["New Branch (Has latest main code)"]
-    B -- "3. Edit code & test with docker compose" --> B
-    B -- "4a. Succeeded?" --> C{"Works as expected?"}
-    C -- "Yes" --> D["Commit & push branch<br/>git push origin feature/my-feature"]
-    D -- "5. Open Pull Request on GitHub" --> E["Merge into main"]
-    C -- "No / Aborted" --> F["Discard or delete branch<br/>git branch -D feature/my-feature"]
-```
-
-1. **Pull Latest Main**:
-   ```bash
-   git checkout main
-   git pull origin main
-   ```
-2. **Create a Feature Branch**:
-   ```bash
-   git checkout -b feature/my-new-feature
-   ```
-3. **Make and Test Changes**:
-   ```bash
-   docker compose up --build -d
-   ```
-4. **Commit and Push**:
-   ```bash
-   git add .
-   git commit -m "feat: describe your change"
-   git push origin feature/my-new-feature
-   ```
-5. **Open Pull Request on GitHub** $\rightarrow$ Merge into `main`.
-
----
-
-## 🛠️ Management & Troubleshooting Commands
-
-| Task | Command |
-|---|---|
-| **Start everything (in background)** | `docker compose up --build -d` |
-| **Check container health & status** | `docker compose ps` |
-| **Stream application logs** | `docker compose logs -f app` |
-| **Stream PostgreSQL logs** | `docker compose logs -f postgres` |
-| **Stop all containers** | `docker compose down` |
-| **Stop and wipe vector database data** | `docker compose down -v` |
-| **Rebuild after code edits** | `docker compose up --build -d` |
-| **Run unit tests locally** | `.\mvnw.cmd test` *(or `./mvnw test` on Linux/macOS)* |
-
----
-
-## 💾 Data Persistence
-
-- Document vectors and chunk metadata are persisted in the Docker named volume `postgres_data`.
-- Running `docker compose down` will **never lose your uploaded documents**. Your embeddings remain intact and ready when you start the containers again.
+- `document-rag/document-rag/` — Spring Boot backend, Dockerfile, backend Compose file, and backend documentation.
+- `rag_frontend/` — Flutter web client and its documentation.
+- `docker-compose.yml` — Recommended root stack for PostgreSQL and the backend.
